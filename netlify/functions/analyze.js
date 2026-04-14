@@ -36,6 +36,13 @@ export const handler = async (event) => {
     }
   }
 
+  const cleanBody = {
+    model: 'claude-haiku-4-5-20251001',
+    max_tokens: body.max_tokens || 2000,
+    system: body.system,
+    messages: body.messages,
+  }
+
   try {
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -43,12 +50,22 @@ export const handler = async (event) => {
         'Content-Type': 'application/json',
         'x-api-key': apiKey,
         'anthropic-version': '2023-06-01',
-        'anthropic-beta': 'web-search-2025-03-05',
       },
-      body: JSON.stringify(body),
+      body: JSON.stringify(cleanBody),
     })
 
-    const data = await response.json()
+    const text = await response.text()
+
+    let data
+    try {
+      data = JSON.parse(text)
+    } catch (e) {
+      return {
+        statusCode: 500,
+        headers: { 'Access-Control-Allow-Origin': '*' },
+        body: JSON.stringify({ error: 'Invalid response', raw: text.slice(0, 500) }),
+      }
+    }
 
     return {
       statusCode: response.status,
