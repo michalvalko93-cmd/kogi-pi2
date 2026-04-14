@@ -16,15 +16,27 @@ export const handler = async (event) => {
   }
 
   const apiKey = process.env.ANTHROPIC_API_KEY
+
   if (!apiKey) {
     return {
       statusCode: 500,
-      body: JSON.stringify({ error: 'ANTHROPIC_API_KEY není nastavený v Netlify env variables.' }),
+      headers: { 'Access-Control-Allow-Origin': '*' },
+      body: JSON.stringify({ error: 'ANTHROPIC_API_KEY neni nastaven' }),
+    }
+  }
+
+  let body
+  try {
+    body = JSON.parse(event.body)
+  } catch (e) {
+    return {
+      statusCode: 400,
+      headers: { 'Access-Control-Allow-Origin': '*' },
+      body: JSON.stringify({ error: 'Invalid JSON' }),
     }
   }
 
   try {
-    const body = JSON.parse(event.body)
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -37,6 +49,7 @@ export const handler = async (event) => {
     })
 
     const data = await response.json()
+
     return {
       statusCode: response.status,
       headers: {
@@ -48,6 +61,7 @@ export const handler = async (event) => {
   } catch (err) {
     return {
       statusCode: 500,
+      headers: { 'Access-Control-Allow-Origin': '*' },
       body: JSON.stringify({ error: err.message }),
     }
   }
