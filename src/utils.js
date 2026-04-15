@@ -97,7 +97,7 @@ export function generateHTML(firm, r) {
 <div class="sh">Draft emailu — připraveno k odeslání</div>
 <div class="eb">Předmět: ${r.email_predmet || ''}
 
-${r.email_telo || ''}
+${(r.email_telo || '').replace(/\[Jméno\]/g, '').replace(/\[Jmeno\]/g, '').replace(/S pozdravem,\s*$/m, 'S pozdravem,').trimEnd()}
 
 [Jméno konzultanta]</div>
 

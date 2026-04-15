@@ -367,8 +367,8 @@ export default function App() {
     const weekFirms = weeks[selWeek] || []
     const zip = new JSZip()
     zip.file('summary.csv', generateCSV(weekFirms, results))
-    weekFirms.filter(f => results[f.ico]?.status === 'done').forEach(f => {
-      zip.file(`${f.status}_${slugify(f.firma)}_${f.ico}.html`, generateHTML(f, results[f.ico].data))
+    weekFirms.filter(f => results[f.ico]?.status === 'done' && results[f.ico]?.data?.oslovit).forEach(f => {
+      zip.file(`${slugify(f.firma)}_${f.ico}.html`, generateHTML(f, results[f.ico].data))
     })
     const blob = await zip.generateAsync({ type: 'blob' })
     const url = URL.createObjectURL(blob)
