@@ -316,12 +316,11 @@ export default function App() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: 'claude-sonnet-4-20250514',
-        max_tokens: 2000,
-        tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+        max_tokens: 3000,
         system: PI_PROMPT,
         messages: [{
           role: 'user',
-          content: `Analyzuj firmu: ${firm.firma}, IČO: ${firm.ico}, Obor: ${firm.nace}, Kraj: ${firm.kraj}, Velikost: ${firm.velikost}. PI 1.0: Výkonnost ${firm.vykonnost}/5, Fluktuace ${firm.fluktuace}/5, Status: ${firm.status}.`,
+          content: `Analyzuj firmu: ${firm.firma}, IČO: ${firm.ico}, Obor: ${firm.nace}, Kraj: ${firm.kraj}, Velikost: ${firm.velikost}. PI 1.0: Výkonnost ${firm.vykonnost}/5, Fluktuace ${firm.fluktuace}/5.`,
         }],
       }),
     })
@@ -347,14 +346,35 @@ export default function App() {
       if (abortRef.current) { addLog('⏸ Přerušeno.'); break }
       setCurrentFirma(firm.firma)
       addLog(`⏳ ${firm.firma}…`)
-      try {
-        const data = await analyzeOne(firm)
-        updateResults(firm.ico, { status: 'done', data, ts: Date.now() })
-        addLog(`✓ ${firm.firma} — ${data.oslovit ? `OSLOVIT | ${data.tema} | ${data.urgence?.toUpperCase()}` : 'přeskočit'}`)
-      } catch (err) {
-        updateResults(firm.ico, { status: 'error', error: err.message, ts: Date.now() })
-        addLog(`✗ ${firm.firma} — ${err.message}`)
+
+      let success = false
+      let lastErr = null
+      const retryDelays = [30000, 60000]
+
+      for (let attempt = 0; attempt <= retryDelays.length; attempt++) {
+        try {
+          const data = await analyzeOne(firm)
+          updateResults(firm.ico, { status: 'done', data, ts: Date.now() })
+          addLog(`✓ ${firm.firma} — ${data.oslovit ? `OSLOVIT | ${data.tema} | ${data.urgence?.toUpperCase()}` : 'přeskočit'}`)
+          success = true
+          break
+        } catch (err) {
+          lastErr = err
+          if (err.message.includes('429') && attempt < retryDelays.length) {
+            const wait = retryDelays[attempt]
+            addLog(`⏳ Rate limit — čekám ${wait / 1000}s…`)
+            await new Promise(r => setTimeout(r, wait))
+          } else {
+            break
+          }
+        }
       }
+
+      if (!success) {
+        updateResults(firm.ico, { status: 'error', error: lastErr?.message, ts: Date.now() })
+        addLog(`✗ ${firm.firma} — ${lastErr?.message}`)
+      }
+
       if (!abortRef.current) await new Promise(r => setTimeout(r, DELAY_MS))
     }
 

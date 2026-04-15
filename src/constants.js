@@ -1,7 +1,7 @@
 export const NAVY = '#2E4057'
 export const WEEKS_COUNT = 6
 export const FIRMS_PER_WEEK = 300
-export const DELAY_MS = 15000
+export const DELAY_MS = 20000
 
 export const STATUS_COLORS = {
   HOT:  { bg: '#fee2e2', text: '#991b1b', border: '#fca5a5' },

@@ -16,7 +16,6 @@ export const handler = async (event) => {
   }
 
   const anthropicKey = process.env.ANTHROPIC_API_KEY
-
   if (!anthropicKey) {
     return {
       statusCode: 500,
@@ -36,7 +35,9 @@ export const handler = async (event) => {
     }
   }
 
-  try {
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms))
+
+  const callAnthropic = async () => {
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -53,42 +54,76 @@ export const handler = async (event) => {
         messages: body.messages,
       }),
     })
+    return response
+  }
 
-    const text = await response.text()
-    let data
-    try { data = JSON.parse(text) } catch (e) {
+  // Retry logika: az 3 pokusy, pri 429 ceka exponencially
+  const MAX_RETRIES = 3
+  const RETRY_DELAYS = [30000, 60000, 90000] // 30s, 60s, 90s
+
+  let lastStatus = 500
+  let lastData = null
+
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    try {
+      const response = await callAnthropic()
+      const text = await response.text()
+
+      let data
+      try { data = JSON.parse(text) } catch (e) {
+        return {
+          statusCode: 500,
+          headers: { 'Access-Control-Allow-Origin': '*' },
+          body: JSON.stringify({ error: 'Invalid response', raw: text.slice(0, 300) }),
+        }
+      }
+
+      lastStatus = response.status
+      lastData = data
+
+      // Uspech
+      if (response.status === 200) {
+        return {
+          statusCode: 200,
+          headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+          body: JSON.stringify(data),
+        }
+      }
+
+      // Rate limit — cekej a zkus znovu
+      if (response.status === 429) {
+        const retryAfter = response.headers?.get?.('retry-after')
+        const waitMs = retryAfter ? parseInt(retryAfter) * 1000 : RETRY_DELAYS[attempt]
+        if (attempt < MAX_RETRIES - 1) {
+          await sleep(waitMs)
+          continue
+        }
+      }
+
+      // Jina chyba — nevratej se
+      return {
+        statusCode: response.status,
+        headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+        body: JSON.stringify(data),
+      }
+
+    } catch (err) {
+      if (attempt < MAX_RETRIES - 1) {
+        await sleep(RETRY_DELAYS[attempt])
+        continue
+      }
       return {
         statusCode: 500,
         headers: { 'Access-Control-Allow-Origin': '*' },
-        body: JSON.stringify({ error: 'Invalid response', raw: text.slice(0, 500) }),
+        body: JSON.stringify({ error: err.message }),
       }
     }
+  }
 
-    // Pokud 401 — vrat jasnou chybu
-    if (response.status === 401) {
-      return {
-        statusCode: 401,
-        headers: { 'Access-Control-Allow-Origin': '*' },
-        body: JSON.stringify({ error: 'WEB_SEARCH_NOT_ENABLED', detail: data }),
-      }
-    }
-
-    // Spoj vsechny text bloky z odpovedi
-    const textContent = (data.content || [])
-      .filter(b => b.type === 'text')
-      .map(b => b.text)
-      .join('')
-
-    return {
-      statusCode: response.status,
-      headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
-      body: JSON.stringify({ ...data, _combined_text: textContent }),
-    }
-  } catch (err) {
-    return {
-      statusCode: 500,
-      headers: { 'Access-Control-Allow-Origin': '*' },
-      body: JSON.stringify({ error: err.message }),
-    }
+  // Vsechny pokusy selhaly
+  return {
+    statusCode: lastStatus,
+    headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+    body: JSON.stringify(lastData || { error: 'Max retries exceeded' }),
   }
 }
