@@ -15,9 +15,10 @@ export const handler = async (event) => {
     return { statusCode: 405, body: 'Method Not Allowed' }
   }
 
-  const apiKey = process.env.ANTHROPIC_API_KEY
+  const anthropicKey = process.env.ANTHROPIC_API_KEY
+  const tavilyKey = process.env.TAVILY_API_KEY
 
-  if (!apiKey) {
+  if (!anthropicKey) {
     return {
       statusCode: 500,
       headers: { 'Access-Control-Allow-Origin': '*' },
@@ -36,22 +37,74 @@ export const handler = async (event) => {
     }
   }
 
-  const cleanBody = {
-    model: 'claude-haiku-4-5-20251001',
-    max_tokens: body.max_tokens || 2000,
-    system: body.system,
-    messages: body.messages,
+  // Extrahuj nazev firmy z user message pro Tavily search
+  const userMessage = body.messages?.[0]?.content || ''
+  const firmaMatch = userMessage.match(/Analyzuj firmu: ([^,]+)/)
+  const firmaName = firmaMatch ? firmaMatch[1].trim() : ''
+
+  // Tavily search - hledej aktualni info o firme
+  let searchContext = ''
+  if (tavilyKey && firmaName) {
+    try {
+      const searches = [
+        `${firmaName} LinkedIn zaměstnanci 2025 2026`,
+        `${firmaName} novinky zprávy 2025 2026`,
+        `${firmaName} výsledky hospodaření restrukturalizace`,
+      ]
+
+      const searchResults = await Promise.all(
+        searches.map(async (query) => {
+          const resp = await fetch('https://api.tavily.com/search', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              api_key: tavilyKey,
+              query,
+              search_depth: 'basic',
+              max_results: 3,
+              include_answer: false,
+            }),
+          })
+          if (!resp.ok) return []
+          const data = await resp.json()
+          return data.results || []
+        })
+      )
+
+      const allResults = searchResults.flat()
+      if (allResults.length > 0) {
+        searchContext = '\n\n## Aktualni data z webu (pouzij jako primarne zdroje):\n'
+        allResults.forEach((r, i) => {
+          searchContext += `\n[${i + 1}] Zdroj: ${r.url} (${new Date().toLocaleDateString('cs-CZ', { month: '2-digit', year: 'numeric' })})\nNadpis: ${r.title}\nObsah: ${r.content?.slice(0, 400)}\n`
+        })
+      }
+    } catch (err) {
+      searchContext = '\n\n## Poznamka: Web search selhal, analyzuj na zaklade dostupnych znalosti.\n'
+    }
   }
+
+  // Pridej search context do user message
+  const enrichedMessages = [
+    {
+      role: 'user',
+      content: userMessage + searchContext,
+    },
+  ]
 
   try {
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-api-key': apiKey,
+        'x-api-key': anthropicKey,
         'anthropic-version': '2023-06-01',
       },
-      body: JSON.stringify(cleanBody),
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: body.max_tokens || 2000,
+        system: body.system,
+        messages: enrichedMessages,
+      }),
     })
 
     const text = await response.text()
