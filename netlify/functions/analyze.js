@@ -16,7 +16,6 @@ export const handler = async (event) => {
   }
 
   const anthropicKey = process.env.ANTHROPIC_API_KEY
-  const tavilyKey = process.env.TAVILY_API_KEY
 
   if (!anthropicKey) {
     return {
@@ -37,60 +36,6 @@ export const handler = async (event) => {
     }
   }
 
-  // Extrahuj nazev firmy z user message pro Tavily search
-  const userMessage = body.messages?.[0]?.content || ''
-  const firmaMatch = userMessage.match(/Analyzuj firmu: ([^,]+)/)
-  const firmaName = firmaMatch ? firmaMatch[1].trim() : ''
-
-  // Tavily search - hledej aktualni info o firme
-  let searchContext = ''
-  if (tavilyKey && firmaName) {
-    try {
-      const searches = [
-        `${firmaName} LinkedIn zaměstnanci 2025 2026`,
-        `${firmaName} novinky zprávy 2025 2026`,
-        `${firmaName} výsledky hospodaření restrukturalizace`,
-      ]
-
-      const searchResults = await Promise.all(
-        searches.map(async (query) => {
-          const resp = await fetch('https://api.tavily.com/search', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              api_key: tavilyKey,
-              query,
-              search_depth: 'basic',
-              max_results: 3,
-              include_answer: false,
-            }),
-          })
-          if (!resp.ok) return []
-          const data = await resp.json()
-          return data.results || []
-        })
-      )
-
-      const allResults = searchResults.flat()
-      if (allResults.length > 0) {
-        searchContext = '\n\n## Aktualni data z webu (pouzij jako primarne zdroje):\n'
-        allResults.forEach((r, i) => {
-          searchContext += `\n[${i + 1}] Zdroj: ${r.url} (${new Date().toLocaleDateString('cs-CZ', { month: '2-digit', year: 'numeric' })})\nNadpis: ${r.title}\nObsah: ${r.content?.slice(0, 400)}\n`
-        })
-      }
-    } catch (err) {
-      searchContext = '\n\n## Poznamka: Web search selhal, analyzuj na zaklade dostupnych znalosti.\n'
-    }
-  }
-
-  // Pridej search context do user message
-  const enrichedMessages = [
-    {
-      role: 'user',
-      content: userMessage + searchContext,
-    },
-  ]
-
   try {
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -98,21 +43,20 @@ export const handler = async (event) => {
         'Content-Type': 'application/json',
         'x-api-key': anthropicKey,
         'anthropic-version': '2023-06-01',
+        'anthropic-beta': 'web-search-2025-03-05',
       },
       body: JSON.stringify({
         model: 'claude-sonnet-4-20250514',
-        max_tokens: body.max_tokens || 2000,
+        max_tokens: 3000,
+        tools: [{ type: 'web_search_20250305', name: 'web_search' }],
         system: body.system,
-        messages: enrichedMessages,
+        messages: body.messages,
       }),
     })
 
     const text = await response.text()
-
     let data
-    try {
-      data = JSON.parse(text)
-    } catch (e) {
+    try { data = JSON.parse(text) } catch (e) {
       return {
         statusCode: 500,
         headers: { 'Access-Control-Allow-Origin': '*' },
@@ -120,13 +64,25 @@ export const handler = async (event) => {
       }
     }
 
+    // Pokud 401 — vrat jasnou chybu
+    if (response.status === 401) {
+      return {
+        statusCode: 401,
+        headers: { 'Access-Control-Allow-Origin': '*' },
+        body: JSON.stringify({ error: 'WEB_SEARCH_NOT_ENABLED', detail: data }),
+      }
+    }
+
+    // Spoj vsechny text bloky z odpovedi
+    const textContent = (data.content || [])
+      .filter(b => b.type === 'text')
+      .map(b => b.text)
+      .join('')
+
     return {
       statusCode: response.status,
-      headers: {
-        'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': '*',
-      },
-      body: JSON.stringify(data),
+      headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+      body: JSON.stringify({ ...data, _combined_text: textContent }),
     }
   } catch (err) {
     return {
