@@ -6,6 +6,9 @@
   directory = "netlify/functions"
   node_bundler = "esbuild"
 
+[functions."analyze"]
+  timeout = 120
+
 [[redirects]]
   from = "/*"
   to = "/index.html"
