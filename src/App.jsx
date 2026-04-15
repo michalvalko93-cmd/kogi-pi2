@@ -12,6 +12,7 @@ import {
 const LS_FIRMS   = 'pi2_firms'
 const LS_RESULTS = 'pi2_results'
 const LS_WEEK    = 'pi2_week'
+const LS_APIKEY  = 'pi2_apikey'
 
 function saveLocal(key, val) {
   try { localStorage.setItem(key, JSON.stringify(val)) } catch (_) {}
@@ -272,6 +273,8 @@ export default function App() {
   const [currentFirma, setCurrentFirma] = useState(null)
   const [logs, setLogs] = useState([])
   const [detail, setDetail] = useState(null)
+  const [apiKey, setApiKey] = useState('')
+  const [showKeyInput, setShowKeyInput] = useState(false)
   const abortRef = useRef(false)
   const resultsRef = useRef({})
 
@@ -283,6 +286,8 @@ export default function App() {
     setResults(r); resultsRef.current = r
     const w = loadLocal(LS_WEEK)
     if (w !== null) setSelWeek(w)
+    const k = localStorage.getItem(LS_APIKEY) || ''
+    setApiKey(k)
   }, [])
 
   function addLog(msg) {
@@ -311,12 +316,21 @@ export default function App() {
   }
 
   async function analyzeOne(firm) {
-    const resp = await fetch('/.netlify/functions/analyze', {
+    const key = apiKey || localStorage.getItem(LS_APIKEY)
+    if (!key) throw new Error('Chybí API klíč — zadej ho v nastavení')
+
+    const resp = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': key,
+        'anthropic-version': '2023-06-01',
+        'anthropic-beta': 'web-search-2025-03-05',
+      },
       body: JSON.stringify({
         model: 'claude-sonnet-4-20250514',
         max_tokens: 3000,
+        tools: [{ type: 'web_search_20250305', name: 'web_search' }],
         system: PI_PROMPT,
         messages: [{
           role: 'user',
@@ -324,9 +338,14 @@ export default function App() {
         }],
       }),
     })
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}))
+      throw new Error(`HTTP ${resp.status}: ${err?.error?.message || ''}`)
+    }
+
     const data = await resp.json()
-    if (data.error) throw new Error(data.error)
+    if (data.error) throw new Error(data.error.message || data.error)
     const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('')
     return parseJSON(text)
   }
@@ -430,10 +449,35 @@ export default function App() {
             Batch Analyzer · {firms.length} firem · {WEEKS_COUNT} týdnů
           </span>
         </div>
-        <label style={{ cursor: 'pointer', background: 'rgba(255,255,255,0.15)', color: '#fff', padding: '6px 14px', borderRadius: 7, fontSize: 12 }}>
-          Změnit XLSX
-          <input type="file" accept=".xlsx,.xls" onChange={handleUpload} style={{ display: 'none' }} />
-        </label>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          {showKeyInput ? (
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <input
+                type="password"
+                placeholder="sk-ant-..."
+                defaultValue={apiKey}
+                onBlur={e => {
+                  const val = e.target.value.trim()
+                  setApiKey(val)
+                  localStorage.setItem(LS_APIKEY, val)
+                  setShowKeyInput(false)
+                  addLog(val ? '✓ API klíč uložen.' : 'API klíč odstraněn.')
+                }}
+                autoFocus
+                style={{ padding: '5px 10px', borderRadius: 6, border: 'none', fontSize: 12, width: 280, background: 'rgba(255,255,255,0.15)', color: '#fff', outline: 'none' }}
+              />
+              <button onClick={() => setShowKeyInput(false)} style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.6)', cursor: 'pointer', fontSize: 16 }}>✕</button>
+            </div>
+          ) : (
+            <button onClick={() => setShowKeyInput(true)} style={{ background: 'rgba(255,255,255,0.15)', color: '#fff', border: 'none', padding: '6px 14px', borderRadius: 7, fontSize: 12, cursor: 'pointer' }}>
+              {apiKey ? '🔑 API klíč ✓' : '🔑 Zadat API klíč'}
+            </button>
+          )}
+          <label style={{ cursor: 'pointer', background: 'rgba(255,255,255,0.15)', color: '#fff', padding: '6px 14px', borderRadius: 7, fontSize: 12 }}>
+            Změnit XLSX
+            <input type="file" accept=".xlsx,.xls" onChange={handleUpload} style={{ display: 'none' }} />
+          </label>
+        </div>
       </div>
 
       {/* Week tabs */}
@@ -487,12 +531,12 @@ export default function App() {
 
         <div style={{ display: 'flex', gap: 8, marginLeft: 'auto', flexWrap: 'wrap' }}>
           {!processing ? (
-            <button onClick={startProcessing} disabled={!pending && !errors} style={{
+            <button onClick={startProcessing} disabled={!pending && !errors || !apiKey} style={{
               background: NAVY, color: '#fff', border: 'none',
               padding: '9px 20px', borderRadius: 8, fontWeight: 700, fontSize: 13, cursor: 'pointer',
-              opacity: (!pending && !errors) ? 0.5 : 1,
+              opacity: ((!pending && !errors) || !apiKey) ? 0.5 : 1,
             }}>
-              {done === 0 ? '▶ Spustit analýzu' : '▶ Pokračovat'}
+              {!apiKey ? '🔑 Zadej API klíč' : done === 0 ? '▶ Spustit analýzu' : '▶ Pokračovat'}
             </button>
           ) : (
             <button onClick={() => { abortRef.current = true }} style={{
